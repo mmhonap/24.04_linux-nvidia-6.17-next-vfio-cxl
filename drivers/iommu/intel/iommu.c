@@ -27,7 +27,6 @@
 #include "iommu.h"
 #include "../dma-iommu.h"
 #include "../irq_remapping.h"
-#include "../iommu-sva.h"
 #include "pasid.h"
 #include "cap_audit.h"
 #include "perfmon.h"
@@ -300,6 +299,7 @@ static int iommu_skip_te_disable;
 #define IDENTMAP_AZALIA		4
 
 const struct iommu_ops intel_iommu_ops;
+static const struct iommu_dirty_ops intel_dirty_ops;
 
 static bool translation_pre_enabled(struct intel_iommu *iommu)
 {
@@ -4030,9 +4030,9 @@ static int blocking_domain_attach_dev(struct iommu_domain *domain,
 }
 
 static struct iommu_domain blocking_domain = {
+	.type = IOMMU_DOMAIN_BLOCKED,
 	.ops = &(const struct iommu_domain_ops) {
 		.attach_dev	= blocking_domain_attach_dev,
-		.free		= intel_iommu_domain_free
 	}
 };
 
@@ -4042,8 +4042,6 @@ static struct iommu_domain *intel_iommu_domain_alloc(unsigned type)
 	struct iommu_domain *domain;
 
 	switch (type) {
-	case IOMMU_DOMAIN_BLOCKED:
-		return &blocking_domain;
 	case IOMMU_DOMAIN_DMA:
 	case IOMMU_DOMAIN_UNMANAGED:
 		dmar_domain = alloc_domain(type);
@@ -4075,9 +4073,56 @@ static struct iommu_domain *intel_iommu_domain_alloc(unsigned type)
 	return NULL;
 }
 
+static struct iommu_domain *
+intel_iommu_domain_alloc_user(struct device *dev, u32 flags,
+			      struct iommu_domain *parent,
+			      const struct iommu_user_data *user_data)
+{
+	struct iommu_domain *domain;
+	struct intel_iommu *iommu;
+	bool dirty_tracking;
+
+	if (flags &
+	    (~(IOMMU_HWPT_ALLOC_NEST_PARENT | IOMMU_HWPT_ALLOC_DIRTY_TRACKING)))
+		return ERR_PTR(-EOPNOTSUPP);
+
+	if (parent || user_data)
+		return ERR_PTR(-EOPNOTSUPP);
+
+	iommu = device_to_iommu(dev, NULL, NULL);
+	if (!iommu)
+		return ERR_PTR(-ENODEV);
+
+	if ((flags & IOMMU_HWPT_ALLOC_NEST_PARENT) && !nested_supported(iommu))
+		return ERR_PTR(-EOPNOTSUPP);
+
+	dirty_tracking = (flags & IOMMU_HWPT_ALLOC_DIRTY_TRACKING);
+	if (dirty_tracking && !ssads_supported(iommu))
+		return ERR_PTR(-EOPNOTSUPP);
+
+	/*
+	 * domain_alloc_user op needs to fully initialize a domain
+	 * before return, so uses iommu_domain_alloc() here for
+	 * simple.
+	 */
+	domain = iommu_domain_alloc(dev->bus);
+	if (!domain)
+		domain = ERR_PTR(-ENOMEM);
+
+	if (!IS_ERR(domain) && dirty_tracking) {
+		if (to_dmar_domain(domain)->use_first_level) {
+			iommu_domain_free(domain);
+			return ERR_PTR(-EOPNOTSUPP);
+		}
+		domain->dirty_ops = &intel_dirty_ops;
+	}
+
+	return domain;
+}
+
 static void intel_iommu_domain_free(struct iommu_domain *domain)
 {
-	if (domain != &si_domain->domain && domain != &blocking_domain)
+	if (domain != &si_domain->domain)
 		domain_exit(to_dmar_domain(domain));
 }
 
@@ -4093,6 +4138,9 @@ static int prepare_domain_attach_device(struct iommu_domain *domain,
 		return -ENODEV;
 
 	if (dmar_domain->force_snooping && !ecap_sc_support(iommu->ecap))
+		return -EINVAL;
+
+	if (domain->dirty_ops && !ssads_supported(iommu))
 		return -EINVAL;
 
 	/* check if this iommu agaw is sufficient for max mapped address */
@@ -4350,6 +4398,8 @@ static bool intel_iommu_capable(struct device *dev, enum iommu_cap cap)
 		return dmar_platform_optin();
 	case IOMMU_CAP_ENFORCE_CACHE_COHERENCY:
 		return ecap_sc_support(info->iommu->ecap);
+	case IOMMU_CAP_DIRTY_TRACKING:
+		return ssads_supported(info->iommu);
 	default:
 		return false;
 	}
@@ -4577,23 +4627,15 @@ static int intel_iommu_enable_iopf(struct device *dev)
 	if (ret)
 		return ret;
 
-	ret = iommu_register_device_fault_handler(dev, iommu_queue_iopf, dev);
-	if (ret)
-		goto iopf_remove_device;
-
 	ret = pci_enable_pri(pdev, PRQ_DEPTH);
-	if (ret)
-		goto iopf_unregister_handler;
+	if (ret) {
+		iopf_queue_remove_device(iommu->iopf_queue, dev);
+		return ret;
+	}
+
 	info->pri_enabled = 1;
 
 	return 0;
-
-iopf_unregister_handler:
-	iommu_unregister_device_fault_handler(dev);
-iopf_remove_device:
-	iopf_queue_remove_device(iommu->iopf_queue, dev);
-
-	return ret;
 }
 
 static int intel_iommu_disable_iopf(struct device *dev)
@@ -4614,14 +4656,7 @@ static int intel_iommu_disable_iopf(struct device *dev)
 	 */
 	pci_disable_pri(to_pci_dev(dev));
 	info->pri_enabled = 0;
-
-	/*
-	 * With PRI disabled and outstanding PRQs drained, unregistering
-	 * fault handler and removing device from iopf queue should never
-	 * fail.
-	 */
-	WARN_ON(iommu_unregister_device_fault_handler(dev));
-	WARN_ON(iopf_queue_remove_device(iommu->iopf_queue, dev));
+	iopf_queue_remove_device(iommu->iopf_queue, dev);
 
 	return 0;
 }
@@ -4693,17 +4728,13 @@ static void intel_iommu_iotlb_sync_map(struct iommu_domain *domain,
 		__mapping_notify_one(info->iommu, dmar_domain, pfn, pages);
 }
 
-static void intel_iommu_remove_dev_pasid(struct device *dev, ioasid_t pasid)
+static void intel_iommu_remove_dev_pasid(struct device *dev, ioasid_t pasid,
+					 struct iommu_domain *domain)
 {
 	struct intel_iommu *iommu = device_to_iommu(dev, NULL, NULL);
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
 	struct dev_pasid_info *curr, *dev_pasid = NULL;
-	struct dmar_domain *dmar_domain;
-	struct iommu_domain *domain;
 	unsigned long flags;
-
-	domain = iommu_get_domain_for_dev_pasid(dev, pasid, 0);
-	if (WARN_ON_ONCE(!domain))
-		goto out_tear_down;
 
 	/*
 	 * The SVA implementation needs to handle its own stuffs like the mm
@@ -4715,7 +4746,6 @@ static void intel_iommu_remove_dev_pasid(struct device *dev, ioasid_t pasid)
 		goto out_tear_down;
 	}
 
-	dmar_domain = to_dmar_domain(domain);
 	spin_lock_irqsave(&dmar_domain->lock, flags);
 	list_for_each_entry(curr, &dmar_domain->dev_pasids, link_domain) {
 		if (curr->dev == dev && curr->pasid == pasid) {
@@ -4746,6 +4776,9 @@ static int intel_iommu_set_dev_pasid(struct iommu_domain *domain,
 
 	if (!pasid_supported(iommu) || dev_is_real_dma_subdevice(dev))
 		return -EOPNOTSUPP;
+
+	if (domain->dirty_ops)
+		return -EINVAL;
 
 	if (context_copied(iommu, info->bus, info->devfn))
 		return -EBUSY;
@@ -4805,10 +4838,89 @@ static void *intel_iommu_hw_info(struct device *dev, u32 *length, u32 *type)
 	return vtd;
 }
 
+static int intel_iommu_set_dirty_tracking(struct iommu_domain *domain,
+					  bool enable)
+{
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	struct device_domain_info *info;
+	int ret;
+
+	spin_lock(&dmar_domain->lock);
+	if (dmar_domain->dirty_tracking == enable)
+		goto out_unlock;
+
+	list_for_each_entry(info, &dmar_domain->devices, link) {
+		ret = intel_pasid_setup_dirty_tracking(info->iommu,
+						       info->domain, info->dev,
+						       IOMMU_NO_PASID, enable);
+		if (ret)
+			goto err_unwind;
+	}
+
+	dmar_domain->dirty_tracking = enable;
+out_unlock:
+	spin_unlock(&dmar_domain->lock);
+
+	return 0;
+
+err_unwind:
+	list_for_each_entry(info, &dmar_domain->devices, link)
+		intel_pasid_setup_dirty_tracking(info->iommu, dmar_domain,
+						 info->dev, IOMMU_NO_PASID,
+						 dmar_domain->dirty_tracking);
+	spin_unlock(&dmar_domain->lock);
+	return ret;
+}
+
+static int intel_iommu_read_and_clear_dirty(struct iommu_domain *domain,
+					    unsigned long iova, size_t size,
+					    unsigned long flags,
+					    struct iommu_dirty_bitmap *dirty)
+{
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	unsigned long end = iova + size - 1;
+	unsigned long pgsize;
+
+	/*
+	 * IOMMUFD core calls into a dirty tracking disabled domain without an
+	 * IOVA bitmap set in order to clean dirty bits in all PTEs that might
+	 * have occurred when we stopped dirty tracking. This ensures that we
+	 * never inherit dirtied bits from a previous cycle.
+	 */
+	if (!dmar_domain->dirty_tracking && dirty->bitmap)
+		return -EINVAL;
+
+	do {
+		struct dma_pte *pte;
+		int lvl = 0;
+
+		pte = pfn_to_dma_pte(dmar_domain, iova >> VTD_PAGE_SHIFT, &lvl,
+				     GFP_ATOMIC);
+		pgsize = level_size(lvl) << VTD_PAGE_SHIFT;
+		if (!pte || !dma_pte_present(pte)) {
+			iova += pgsize;
+			continue;
+		}
+
+		if (dma_sl_pte_test_and_clear_dirty(pte, flags))
+			iommu_dirty_bitmap_record(dirty, iova, pgsize);
+		iova += pgsize;
+	} while (iova < end);
+
+	return 0;
+}
+
+static const struct iommu_dirty_ops intel_dirty_ops = {
+	.set_dirty_tracking = intel_iommu_set_dirty_tracking,
+	.read_and_clear_dirty = intel_iommu_read_and_clear_dirty,
+};
+
 const struct iommu_ops intel_iommu_ops = {
+	.blocked_domain		= &blocking_domain,
 	.capable		= intel_iommu_capable,
 	.hw_info		= intel_iommu_hw_info,
 	.domain_alloc		= intel_iommu_domain_alloc,
+	.domain_alloc_user	= intel_iommu_domain_alloc_user,
 	.probe_device		= intel_iommu_probe_device,
 	.probe_finalize		= intel_iommu_probe_finalize,
 	.release_device		= intel_iommu_release_device,
