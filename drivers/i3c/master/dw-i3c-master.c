@@ -283,6 +283,8 @@ static bool dw_i3c_master_supports_ccc_cmd(struct i3c_master_controller *m,
 	case I3C_CCC_GETSTATUS:
 	case I3C_CCC_GETMXDS:
 	case I3C_CCC_GETHDRCAP:
+	case I3C_CCC_SETAASA:
+	case I3C_CCC_VENDOR(0, true): /* SETHID */
 		return true;
 	default:
 		return false;
@@ -541,13 +543,20 @@ static void dw_i3c_master_set_intr_regs(struct dw_i3c_master *master)
 
 static int dw_i3c_clk_cfg(struct dw_i3c_master *master)
 {
-	unsigned long core_rate, core_period;
+	unsigned int core_rate, core_period;
 	u32 scl_timing;
 	u8 hcnt, lcnt;
+	int ret = 0;
 
-	core_rate = clk_get_rate(master->core_clk);
-	if (!core_rate)
-		return -EINVAL;
+	if (ACPI_HANDLE(master->dev)) {
+		ret = device_property_read_u32(master->dev, "clock-frequency", &core_rate);
+		if (ret)
+			return ret;
+	} else {
+		core_rate = clk_get_rate(master->core_clk);
+		if (!core_rate)
+			return -EINVAL;
+	}
 
 	core_period = DIV_ROUND_UP(1000000000, core_rate);
 
@@ -594,13 +603,20 @@ static int dw_i3c_clk_cfg(struct dw_i3c_master *master)
 
 static int dw_i2c_clk_cfg(struct dw_i3c_master *master)
 {
-	unsigned long core_rate, core_period;
+	unsigned int core_rate, core_period;
 	u16 hcnt, lcnt;
 	u32 scl_timing;
+	int ret = 0;
 
-	core_rate = clk_get_rate(master->core_clk);
-	if (!core_rate)
-		return -EINVAL;
+	if (ACPI_HANDLE(master->dev)) {
+		ret = device_property_read_u32(master->dev, "clock-frequency", &core_rate);
+		if (ret)
+			return ret;
+	} else {
+		core_rate = clk_get_rate(master->core_clk);
+		if (!core_rate)
+			return -EINVAL;
+	}
 
 	core_period = DIV_ROUND_UP(1000000000, core_rate);
 
@@ -1545,20 +1561,22 @@ int dw_i3c_common_probe(struct dw_i3c_master *master,
 	if (IS_ERR(master->regs))
 		return PTR_ERR(master->regs);
 
-	master->core_clk = devm_clk_get_enabled(&pdev->dev, NULL);
-	if (IS_ERR(master->core_clk))
-		return PTR_ERR(master->core_clk);
+	if (!ACPI_HANDLE(&pdev->dev)) {
+		master->core_clk = devm_clk_get_enabled(&pdev->dev, NULL);
+		if (IS_ERR(master->core_clk))
+			return PTR_ERR(master->core_clk);
 
-	master->pclk = devm_clk_get_optional_enabled(&pdev->dev, "pclk");
-	if (IS_ERR(master->pclk))
-		return PTR_ERR(master->pclk);
+		master->pclk = devm_clk_get_optional_enabled(&pdev->dev, "pclk");
+		if (IS_ERR(master->pclk))
+			return PTR_ERR(master->pclk);
 
-	master->core_rst = devm_reset_control_get_optional_exclusive(&pdev->dev,
-								    "core_rst");
-	if (IS_ERR(master->core_rst))
-		return PTR_ERR(master->core_rst);
+		master->core_rst = devm_reset_control_get_optional_exclusive(&pdev->dev,
+									     "core_rst");
+		if (IS_ERR(master->core_rst))
+			return PTR_ERR(master->core_rst);
 
-	reset_control_deassert(master->core_rst);
+		reset_control_deassert(master->core_rst);
+	}
 
 	spin_lock_init(&master->xferqueue.lock);
 	INIT_LIST_HEAD(&master->xferqueue.list);
@@ -1765,11 +1783,12 @@ static const struct of_device_id dw_i3c_master_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, dw_i3c_master_of_match);
 
-static const struct acpi_device_id amd_i3c_device_match[] = {
+static const struct acpi_device_id dw_i3c_master_acpi_match[] = {
 	{ "AMDI0015", AMD_I3C_OD_PP_TIMING },
+	{ "NVDA2018" },
 	{ }
 };
-MODULE_DEVICE_TABLE(acpi, amd_i3c_device_match);
+MODULE_DEVICE_TABLE(acpi, dw_i3c_master_acpi_match);
 
 static struct platform_driver dw_i3c_driver = {
 	.probe = dw_i3c_probe,
@@ -1778,7 +1797,7 @@ static struct platform_driver dw_i3c_driver = {
 	.driver = {
 		.name = "dw-i3c-master",
 		.of_match_table = dw_i3c_master_of_match,
-		.acpi_match_table = amd_i3c_device_match,
+		.acpi_match_table = dw_i3c_master_acpi_match,
 		.pm = &dw_i3c_pm_ops,
 	},
 };

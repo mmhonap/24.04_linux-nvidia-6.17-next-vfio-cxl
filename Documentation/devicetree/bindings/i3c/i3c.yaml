@@ -24,15 +24,14 @@ properties:
     description: |
       Each I2C device connected to the bus should be described in a subnode.
 
-      All I3C devices are supposed to support DAA (Dynamic Address Assignment),
-      and are thus discoverable. So, by default, I3C devices do not have to be
-      described in the device tree. This being said, one might want to attach
-      extra resources to these devices, and those resources may have to be
-      described in the device tree, which in turn means we have to describe
-      I3C devices.
+      By default, I3C devices do not have to be described in the device tree.
+      This being said, one might want to attach extra resources to these
+      devices, and those resources may have to be described in the device tree,
+      which in turn means we have to describe I3C devices.
 
-      Another use case for describing an I3C device in the device tree is when
-      this I3C device has a static I2C address and we want to assign it a
+      I3C child would have to be described in the device tree if the I3C device
+      uses SETAASA for its discovery and needs to be assigned a static
+      address, or if it uses a static I2C address and we want to assign a
       specific I3C dynamic address before the DAA takes place (so that other
       devices on the bus can't take this dynamic address).
 
@@ -146,6 +145,17 @@ patternProperties:
           present (first cell of the reg property != 0), this address is assigned
           through SETDASA. If static address is not present, this address is assigned
           through SETNEWDA after assigning a temporary address via ENTDAA.
+
+      mipi-i3c-static-method:
+        $ref: /schemas/types.yaml#/definitions/uint32
+        enum: [ 1, 2 ]
+        description: |
+          Bitmap (Bit(0) = ENTDAA, Bit(1) = SETAASA) that indicates the static
+          address method used for the device discovery. This property is mandatory
+          for I3C devices that require to use SETAASA instead of ENTDAA to assign
+          a static address. The static address will be the one encoded in reg[0]
+          if SETAASA is used. ENTDAA will remain as the default method even if
+          this property is not present.
 
     required:
       - reg

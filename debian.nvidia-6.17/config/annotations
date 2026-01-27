@@ -111,6 +111,9 @@ CONFIG_DRM_NOUVEAU_GSP_DEFAULT                  note<'Disable nouveau for NVIDIA
 CONFIG_DRM_NOUVEAU_SVM                          policy<{'amd64': '-', 'arm64': '-'}>
 CONFIG_DRM_NOUVEAU_SVM                          note<'Disable nouveau for NVIDIA kernels'>
 
+CONFIG_DW_I3C_MASTER                            policy<{'amd64': 'n', 'arm64': 'm'}>
+CONFIG_DW_I3C_MASTER                            note<'Enable DesignWare I3C master controller for Tegra410'>
+
 CONFIG_EFI_CAPSULE_LOADER                       policy<{'amd64': 'm', 'arm64': 'y'}>
 CONFIG_EFI_CAPSULE_LOADER                       note<'LP: #2067111'>
 
@@ -119,6 +122,9 @@ CONFIG_ETM4X_IMPDEF_FEATURE                     note<'Required for Grace enablem
 
 CONFIG_GPIO_AAEON                               policy<{'amd64': '-'}>
 CONFIG_GPIO_AAEON                               note<'Disable all Ubuntu ODM drivers'>
+
+CONFIG_I3C                                      policy<{'amd64': 'n', 'arm64': 'm'}>
+CONFIG_I3C                                      note<'Enable I3C bus support for Tegra410 and SPD5118 temperature sensors'>
 
 CONFIG_IOMMU_DEFAULT_DMA_LAZY                   policy<{'amd64': 'y', 'arm64': 'n'}>
 CONFIG_IOMMU_DEFAULT_DMA_LAZY                   note<'On Nvidia CPU passthrough mode is recommend so set passthrough mode as default for better performance'>
@@ -182,6 +188,9 @@ CONFIG_SAMPLE_CORESIGHT_SYSCFG                  note<'Required for Grace enablem
 
 CONFIG_SENSORS_AAEON                            policy<{'amd64': '-'}>
 CONFIG_SENSORS_AAEON                            note<'Disable all Ubuntu ODM drivers'>
+
+CONFIG_SENSORS_SPD5118                          policy<{'amd64': 'n', 'arm64': 'm'}>
+CONFIG_SENSORS_SPD5118                          note<'Enable SPD5118 temperature sensor support for DDR5 memory modules'>
 
 CONFIG_SND_HDA_ACPI                             policy<{'amd64': 'n', 'arm64': 'm'}>
 CONFIG_SND_HDA_ACPI                             note<'Add support for ACPI-enumerated HDA'>

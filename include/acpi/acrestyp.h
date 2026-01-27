@@ -421,6 +421,7 @@ ACPI_RESOURCE_SERIAL_COMMON};
 
 struct acpi_resource_i2c_serialbus {
 	ACPI_RESOURCE_SERIAL_COMMON u8 access_mode;
+	u8 lvr;
 	u16 slave_address;
 	u32 connection_speed;
 };

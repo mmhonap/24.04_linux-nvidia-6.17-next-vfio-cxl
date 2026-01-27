@@ -18,6 +18,7 @@
 #include <linux/bits.h>
 #include <linux/err.h>
 #include <linux/i2c.h>
+#include <linux/i3c/device.h>
 #include <linux/hwmon.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -770,7 +771,67 @@ static struct i2c_driver spd5118_i2c_driver = {
 	.address_list	= IS_ENABLED(CONFIG_SENSORS_SPD5118_DETECT) ? normal_i2c : NULL,
 };
 
-module_i2c_driver(spd5118_i2c_driver);
+/* I3C */
+
+static int spd5118_i3c_probe(struct i3c_device *i3cdev)
+{
+	struct device *dev = i3cdev_to_dev(i3cdev);
+	struct regmap *regmap;
+	unsigned int regval;
+	int err;
+
+	/*
+	 * I3C devices use 16-bit register addressing.
+	 * Per SPD5118 specification section 7.2, I3C interface uses
+	 * 16-bit register address mode.
+	 */
+	regmap = devm_regmap_init_i3c(i3cdev, &spd5118_regmap8_config);
+	if (IS_ERR(regmap))
+		return dev_err_probe(dev, PTR_ERR(regmap), "regmap init failed\n");
+
+	/* Verify this is a SPD5118 device */
+	err = regmap_read(regmap, SPD5118_REG_TYPE, &regval);
+	if (err)
+		return err;
+
+	/* Check device type - should be 0x51 in first register */
+	if (regval != 0x51)
+		return -ENODEV;
+
+	err = regmap_read(regmap, SPD5118_REG_TYPE + 1, &regval);
+	if (err)
+		return err;
+
+	/* Second register should be 0x18 (combined: 0x5118) */
+	if (regval != 0x18)
+		return -ENODEV;
+
+	/* I3C devices always use 16-bit addressing */
+	return spd5118_common_probe(dev, regmap, true);
+}
+
+/*
+ * SPD5118 does not have a manufacturer/part ID defined in the
+ * JESD specification for I3C. We use a generic match for now.
+ * Devices should be instantiated via device tree or ACPI.
+ */
+static const struct i3c_device_id spd5118_i3c_ids[] = {
+	I3C_CLASS(I3C_DCR_GENERIC_DEVICE, NULL),
+	{ }
+};
+MODULE_DEVICE_TABLE(i3c, spd5118_i3c_ids);
+
+static struct i3c_driver spd5118_i3c_driver = {
+	.driver = {
+		.name	= "spd5118_i3c",
+		.of_match_table = spd5118_of_ids,
+		.pm = pm_sleep_ptr(&spd5118_pm_ops),
+	},
+	.probe		= spd5118_i3c_probe,
+	.id_table	= spd5118_i3c_ids,
+};
+
+module_i3c_i2c_driver(spd5118_i3c_driver, &spd5118_i2c_driver)
 
 MODULE_AUTHOR("René Rebe <rene@exactcode.de>");
 MODULE_AUTHOR("Guenter Roeck <linux@roeck-us.net>");
