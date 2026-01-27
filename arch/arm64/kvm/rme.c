@@ -754,10 +754,10 @@ void kvm_realm_unmap_range(struct kvm *kvm, unsigned long start,
 	unsigned long end = start + size;
 	struct realm *realm = &kvm->arch.realm;
 
-	end = min(BIT(realm->ia_bits - 1), end);
-
 	if (!kvm_realm_is_created(kvm))
 		return;
+
+	end = min(BIT(realm->ia_bits - 1), end);
 
 	realm_unmap_shared_range(kvm, find_map_level(realm, start, end),
 				 start, end, may_block);
