@@ -214,6 +214,13 @@ struct vfio_device_info {
 #define VFIO_DEVICE_FLAGS_FSL_MC (1 << 6)	/* vfio-fsl-mc device */
 #define VFIO_DEVICE_FLAGS_CAPS	(1 << 7)	/* Info supports caps */
 #define VFIO_DEVICE_FLAGS_CDX	(1 << 8)	/* vfio-cdx device */
+/*
+ * CXL Type-2 device (memory coherent; e.g. GPU, accelerator). When set,
+ * VFIO_DEVICE_FLAGS_PCI is also set (same device is a PCI device). The
+ * capability chain (VFIO_DEVICE_FLAGS_CAPS) contains VFIO_DEVICE_INFO_CAP_CXL
+ * describing HDM decoders, DPA size, and CXL-specific options.
+ */
+#define VFIO_DEVICE_FLAGS_CXL   (1 << 9)        /* Device supports CXL */
 	__u32	num_regions;	/* Max region index + 1 */
 	__u32	num_irqs;	/* Max IRQ index + 1 */
 	__u32   cap_offset;	/* Offset within info struct of first cap */
@@ -254,6 +261,39 @@ struct vfio_device_info_cap_pci_atomic_comp {
 #define VFIO_PCI_ATOMIC_COMP64	(1 << 1)
 #define VFIO_PCI_ATOMIC_COMP128	(1 << 2)
 	__u32 reserved;
+};
+
+/*
+ * VFIO_DEVICE_INFO_CAP_CXL - CXL Type-2 device capability
+ *
+ * Present in the device info capability chain when VFIO_DEVICE_FLAGS_CXL
+ * is set. Describes Host Managed Device Memory (HDM) layout and CXL
+ * memory options so that userspace (e.g. QEMU) can expose the CXL region
+ * and component registers correctly to the guest.
+ */
+#define VFIO_DEVICE_INFO_CAP_CXL                6
+struct vfio_device_info_cap_cxl {
+	struct vfio_info_cap_header header;
+	__u8  hdm_count; /* Number of HDM decoders */
+	__u8  hdm_regs_bar_index; /* PCI BAR containing HDM registers */
+	__u16 pad;
+	__u32 flags;
+/* Decoder was committed by host firmware/BIOS */
+#define VFIO_CXL_CAP_COMMITTED		(1 << 0)
+/*
+ * Memory was pre-committed (firmware-programmed); VMM need not allocate
+ * from CXL pool
+ */
+#define VFIO_CXL_CAP_PRECOMMITTED	(1 << 1)
+/* Device memory is non-cached (e.g. uncacheable or write-combining) */
+#define VFIO_CXL_CAP_NONCACHED		(1 << 2)
+/* Device supports RAS poison handling */
+#define VFIO_CXL_CAP_RAS_POISON		(1 << 3)
+/* CXL Confidential Computing memory encryption supported */
+#define VFIO_CXL_CAP_CCA_ENCRYPTION	(1 << 4)
+	__u64 hdm_regs_size; /* Size in bytes of HDM register block */
+	__u64 hdm_regs_offset; /* Byte offset within the BAR to the HDM decoder block */
+	__u64 dpa_size; /* Device Physical Address (DPA) size in bytes */
 };
 
 /**
