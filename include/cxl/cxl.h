@@ -293,4 +293,7 @@ int cxl_dpa_free(struct cxl_endpoint_decoder *cxled);
 struct cxl_region *cxl_create_region(struct cxl_root_decoder *cxlrd,
 				     struct cxl_endpoint_decoder **cxled,
 				     int ways);
+
+int cxl_get_hdm_reg_info(struct cxl_dev_state *cxlds, u32 *count,
+			 resource_size_t *offset, resource_size_t *size);
 #endif /* __CXL_CXL_H__ */

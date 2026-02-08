@@ -528,6 +528,51 @@ int cxl_hdm_decode_init(struct cxl_dev_state *cxlds, struct cxl_hdm *cxlhdm,
 }
 EXPORT_SYMBOL_NS_GPL(cxl_hdm_decode_init, "CXL");
 
+/**
+ * cxl_get_hdm_reg_info - Get HDM decoder register block location and count
+ * @cxlds: CXL device state (must have component regs enumerated)
+ * @count: Output: number of HDM decoders (from DVSEC cap). Only set when
+ *         the device has a valid HDM decoder capability.
+ * @offset: Output: byte offset of the HDM decoder register block within the
+ *          component register BAR. Only set when valid.
+ * @size: Output: size in bytes of the HDM decoder register block. Only set
+ *        when valid.
+ *
+ * Reads the CXL component register map and DVSEC capability to return the
+ * Host Managed Device Memory (HDM) decoder register block offset and size,
+ * and the number of HDM decoders. This function requires cxlds->cxl_dvsec
+ * to be non-zero.
+ *
+ * Return: 0 on success. A negative errno is returned when config read
+ * failure or when the decoder registers are not valid.
+ */
+int cxl_get_hdm_reg_info(struct cxl_dev_state *cxlds, u32 *count,
+			 resource_size_t *offset, resource_size_t *size)
+{
+	struct pci_dev *pdev = to_pci_dev(cxlds->dev);
+	struct cxl_component_reg_map *map =
+		&cxlds->reg_map.component_map;
+	int d = cxlds->cxl_dvsec;
+	u16 cap;
+	int rc;
+
+	/* HDM decoder registers not implemented */
+	if (!map->hdm_decoder.valid || !d)
+		return -ENODEV;
+
+	rc = pci_read_config_word(pdev,
+				  d + PCI_DVSEC_CXL_CAP_OFFSET, &cap);
+	if (rc)
+		return rc;
+
+	*count = FIELD_GET(PCI_DVSEC_CXL_HDM_COUNT_MASK, cap);
+	*offset = map->hdm_decoder.offset;
+	*size = map->hdm_decoder.size;
+
+	return 0;
+}
+EXPORT_SYMBOL_NS_GPL(cxl_get_hdm_reg_info, "CXL");
+
 #define CXL_DOE_TABLE_ACCESS_REQ_CODE		0x000000ff
 #define   CXL_DOE_TABLE_ACCESS_REQ_CODE_READ	0
 #define CXL_DOE_TABLE_ACCESS_TABLE_TYPE		0x0000ff00
