@@ -49,6 +49,8 @@ struct vfio_pci_region {
 	u32				flags;
 };
 
+struct vfio_pci_cxl_state;
+
 struct vfio_pci_core_device {
 	struct vfio_device	vdev;
 	struct pci_dev		*pdev;
@@ -80,6 +82,7 @@ struct vfio_pci_core_device {
 	bool			needs_pm_restore:1;
 	bool			pm_intx_masked:1;
 	bool			pm_runtime_engaged:1;
+	bool                    disable_cxl:1;
 	struct pci_saved_state	*pci_saved_state;
 	struct pci_saved_state	*pm_save;
 	int			ioeventfds_nr;
@@ -94,6 +97,7 @@ struct vfio_pci_core_device {
 	struct vfio_pci_core_device	*sriov_pf_core_dev;
 	struct notifier_block	nb;
 	struct rw_semaphore	memory_lock;
+	struct vfio_pci_cxl_state *cxl;
 };
 
 /* Will be exported for vfio pci drivers usage */
