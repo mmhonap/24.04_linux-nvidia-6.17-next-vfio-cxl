@@ -234,6 +234,12 @@ void vfio_pci_cxl_detect_and_init(struct vfio_pci_core_device *vdev)
 
 	pci_dbg(pdev, "vfio_cxl: Component registers probed successfully\n");
 
+	cxl->cxlds.media_ready = !cxl_await_range_active(&cxl->cxlds);
+	if (!cxl->cxlds.media_ready) {
+		pci_err(pdev, "CXL media not ready\n");
+		goto failed;
+	}
+
 	pci_info(pdev, "CXL Type-2 device initialized successfully\n");
 
 	return;
