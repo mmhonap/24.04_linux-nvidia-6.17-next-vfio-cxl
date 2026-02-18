@@ -21,9 +21,11 @@ struct vfio_pci_cxl_state {
 	size_t                       hdm_reg_size;
 	resource_size_t              comp_reg_offset;
 	size_t                       comp_reg_size;
+	size_t                       dpa_size;
 	u32                          hdm_count;
 	u16                          dvsec;
 	u8                           comp_reg_bar;
+	bool                         precommitted;
 };
 
 #endif /* __LINUX_VFIO_CXL_CORE_H */
