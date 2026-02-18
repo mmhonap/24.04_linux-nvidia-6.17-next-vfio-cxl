@@ -1,0 +1,7 @@
+config VFIO_CXL_CORE
+	tristate "VFIO CXL core"
+	depends on VFIO_PCI_CORE && CXL_BUS && CXL_MEM
+	help
+	  Core library for VFIO CXL Type-2 device support (enlightened path).
+	  When enabled, vfio-pci-core can detect and manage CXL Type-2 devices
+	  without a separate variant driver.
