@@ -123,6 +123,10 @@ ssize_t vfio_cxl_config_rw(struct vfio_pci_core_device *pcdev,
 ssize_t vfio_cxl_mmio_bar_rw(struct vfio_pci_core_device *pcdev,
 			     char __user *buf, size_t count, loff_t *ppos,
 			     bool write);
+int vfio_cxl_get_info(struct vfio_pci_core_device *vdev,
+		      struct vfio_info_cap *caps);
+int vfio_cxl_get_region_info(struct vfio_pci_core_device *vdev,
+			     void __user *arg, struct vfio_region_info *info);
 
 #else
 
@@ -153,6 +157,14 @@ static inline ssize_t
 vfio_cxl_mmio_bar_rw(struct vfio_pci_core_device *vdev,
 		     char __user *buf, size_t count, loff_t *ppos,
 		     bool write)
+{ return -ENOTTY; }
+static inline int
+vfio_cxl_get_info(struct vfio_pci_core_device *vdev,
+		  struct vfio_info_cap *caps)
+{ return -ENOTTY; }
+static inline int
+vfio_cxl_get_region_info(struct vfio_pci_core_device *vdev,
+			 void __user *arg, struct vfio_region_info *info)
 { return -ENOTTY; }
 
 #endif /* CONFIG_VFIO_CXL_CORE */

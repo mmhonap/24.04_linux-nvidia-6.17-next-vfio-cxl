@@ -961,6 +961,13 @@ static int vfio_pci_ioctl_get_info(struct vfio_pci_core_device *vdev,
 	if (vdev->reset_works)
 		info.flags |= VFIO_DEVICE_FLAGS_RESET;
 
+	if (vdev->cxl) {
+		ret = vfio_cxl_get_info(vdev, &caps);
+		if (ret)
+			return ret;
+		info.flags |= VFIO_DEVICE_FLAGS_CXL;
+	}
+
 	info.num_regions = VFIO_PCI_NUM_REGIONS + vdev->num_regions;
 	info.num_irqs = VFIO_PCI_NUM_IRQS;
 
@@ -1011,6 +1018,12 @@ static int vfio_pci_ioctl_get_region_info(struct vfio_pci_core_device *vdev,
 
 	if (info.argsz < minsz)
 		return -EINVAL;
+
+	if (vdev->cxl) {
+		ret = vfio_cxl_get_region_info(vdev, arg, &info);
+		if (ret != -ENOTTY)
+			return ret;
+	}
 
 	switch (info.index) {
 	case VFIO_PCI_CONFIG_REGION_INDEX:

@@ -33,6 +33,143 @@ u8 vfio_cxl_get_component_reg_bar(struct vfio_pci_core_device *vdev)
 }
 EXPORT_SYMBOL_GPL(vfio_cxl_get_component_reg_bar);
 
+static int comp_reg_bar_get_region_info(struct vfio_pci_core_device *pcdev,
+					void __user *uarg)
+{
+	struct vfio_pci_cxl_state *cxl = pcdev->cxl;
+	struct pci_dev *pdev = pcdev->pdev;
+	unsigned long minsz = offsetofend(struct vfio_region_info, offset);
+	struct vfio_info_cap caps = { .buf = NULL, .size = 0 };
+	struct vfio_region_info_cap_sparse_mmap *sparse;
+	u64 start, end, len;
+	struct vfio_region_info info;
+	u32 size;
+	int ret;
+
+	if (copy_from_user(&info, uarg, minsz))
+		return -EFAULT;
+
+	if (info.argsz < minsz)
+		return -EINVAL;
+
+	start = pci_resource_start(pdev, cxl->comp_reg_bar);
+	len = pci_resource_len(pdev, cxl->comp_reg_bar);
+	end = len; /* end of BAR in offset terms */
+
+	if (!cxl->comp_reg_offset ||
+	    cxl->comp_reg_offset + cxl->comp_reg_size == end) {
+		size = struct_size(sparse, areas, 1);
+
+		sparse = kzalloc(size, GFP_KERNEL);
+		if (!sparse)
+			return -ENOMEM;
+
+		sparse->nr_areas = 1;
+		sparse->areas[0].offset =
+			cxl->comp_reg_offset ? 0 : cxl->comp_reg_size;
+		sparse->areas[0].size = len - cxl->comp_reg_size;
+	} else {
+		size = struct_size(sparse, areas, 2);
+
+		sparse = kzalloc(size, GFP_KERNEL);
+		if (!sparse)
+			return -ENOMEM;
+
+		sparse->nr_areas = 2;
+
+		sparse->areas[0].offset = 0;
+		sparse->areas[0].size = cxl->comp_reg_offset;
+
+		sparse->areas[1].offset =
+			sparse->areas[0].size + cxl->comp_reg_size;
+		sparse->areas[1].size =
+			len - sparse->areas[0].size - cxl->comp_reg_size;
+	}
+
+	sparse->header.id = VFIO_REGION_INFO_CAP_SPARSE_MMAP;
+	sparse->header.version = 1;
+
+	ret = vfio_info_add_capability(&caps, &sparse->header, size);
+	kfree(sparse);
+	if (ret)
+		return ret;
+
+	info.offset = VFIO_PCI_INDEX_TO_OFFSET(info.index);
+	info.size = len;
+	info.flags = VFIO_REGION_INFO_FLAG_READ |
+		VFIO_REGION_INFO_FLAG_WRITE |
+		VFIO_REGION_INFO_FLAG_MMAP;
+
+	if (caps.size) {
+		info.flags |= VFIO_REGION_INFO_FLAG_CAPS;
+		if (info.argsz < sizeof(info) + caps.size) {
+			info.argsz = sizeof(info) + caps.size;
+			info.cap_offset = 0;
+		} else {
+			vfio_info_cap_shift(&caps, sizeof(info));
+			if (copy_to_user(uarg + sizeof(info), caps.buf,
+					 caps.size)) {
+				kfree(caps.buf);
+				return -EFAULT;
+			}
+			info.cap_offset = sizeof(info);
+		}
+		kfree(caps.buf);
+	}
+
+	return copy_to_user(uarg, &info, minsz) ? -EFAULT : 0;
+}
+
+int vfio_cxl_get_region_info(struct vfio_pci_core_device *vdev,
+			     void __user *arg,
+			     struct vfio_region_info *info)
+{
+	struct vfio_pci_cxl_state *cxl = vdev->cxl;
+	unsigned long minsz = offsetofend(struct vfio_region_info, offset);
+
+	if (!cxl)
+		return -ENOTTY;
+
+	if (!info)
+		return -ENOTTY;
+
+	if (info->index != cxl->comp_reg_bar)
+		return -ENOTTY;
+
+	if (info->argsz < minsz)
+		return -EINVAL;
+
+	return comp_reg_bar_get_region_info(vdev, arg);
+}
+EXPORT_SYMBOL_GPL(vfio_cxl_get_region_info);
+
+int vfio_cxl_get_info(struct vfio_pci_core_device *vdev,
+		      struct vfio_info_cap *caps)
+{
+	struct vfio_pci_cxl_state *cxl = vdev->cxl;
+	struct vfio_device_info_cap_cxl cxl_cap = {0};
+
+	if (!cxl)
+		return 0;
+
+	/* Fill in from CXL device structure */
+	cxl_cap.header.id = VFIO_DEVICE_INFO_CAP_CXL;
+	cxl_cap.header.version = 1;
+	cxl_cap.hdm_count = cxl->hdm_count;
+	cxl_cap.hdm_regs_offset = cxl->comp_reg_offset + cxl->hdm_reg_offset;
+	cxl_cap.hdm_regs_size = cxl->hdm_reg_size;
+	cxl_cap.hdm_regs_bar_index = cxl->comp_reg_bar;
+	cxl_cap.dpa_size = cxl->dpa_size;
+
+	if (cxl->precommitted) {
+		cxl_cap.flags |= VFIO_CXL_CAP_COMMITTED |
+			VFIO_CXL_CAP_PRECOMMITTED;
+	}
+
+	return vfio_info_add_capability(caps, &cxl_cap.header, sizeof(cxl_cap));
+}
+EXPORT_SYMBOL_GPL(vfio_cxl_get_info);
+
 /**
  * vfio_pci_cxl_config_in_dvsec_range - True if config offset
  * is in CXL DVSEC range
