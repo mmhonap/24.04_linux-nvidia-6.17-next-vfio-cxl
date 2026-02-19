@@ -17,6 +17,10 @@ struct vfio_pci_cxl_state {
 	struct cxl_memdev           *cxlmd;
 	struct cxl_root_decoder     *cxlrd;
 	struct cxl_endpoint_decoder *cxled;
+	struct cxl_region           *region;
+	resource_size_t              region_hpa;
+	size_t                       region_size;
+	void __iomem                *region_vaddr;
 	resource_size_t              hdm_reg_offset;
 	size_t                       hdm_reg_size;
 	resource_size_t              comp_reg_offset;

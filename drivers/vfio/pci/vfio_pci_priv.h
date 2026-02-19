@@ -110,12 +110,20 @@ static inline bool vfio_pci_is_vga(struct pci_dev *pdev)
 
 void vfio_pci_cxl_detect_and_init(struct vfio_pci_core_device *vdev);
 void vfio_pci_cxl_cleanup(struct vfio_pci_core_device *vdev);
+int vfio_cxl_create_cxl_region(struct vfio_pci_core_device *vdev,
+			       resource_size_t size);
+void vfio_cxl_destroy_cxl_region(struct vfio_pci_core_device *vdev);
 
 #else
 
 static inline void
 vfio_pci_cxl_detect_and_init(struct vfio_pci_core_device *vdev) { }
 static inline void vfio_pci_cxl_cleanup(struct vfio_pci_core_device *vdev) { }
+static inline int vfio_cxl_create_cxl_region(struct vfio_pci_core_device *vdev,
+					     resource_size_t size)
+{ return 0; }
+static inline void
+vfio_cxl_destroy_cxl_region(struct vfio_pci_core_device *vdev) { }
 
 #endif /* CONFIG_VFIO_CXL_CORE */
 

@@ -244,6 +244,155 @@ static int vfio_cxl_create_memdev(struct vfio_pci_core_device *vdev,
 	return 0;
 }
 
+static int vfio_cxl_allocate_hpa(struct vfio_pci_cxl_state *cxl,
+				 struct pci_dev *pdev, resource_size_t size)
+{
+	resource_size_t max_size;
+
+	cxl->cxlrd = cxl_get_hpa_freespace(cxl->cxlmd, 1,
+					   CXL_DECODER_F_RAM |
+					   CXL_DECODER_F_TYPE2,
+					   &max_size);
+	if (IS_ERR(cxl->cxlrd)) {
+		pci_err(pdev, "Failed to get HPA free space\n");
+		return PTR_ERR(cxl->cxlrd);
+	}
+
+	if (max_size < size) {
+		pci_err(pdev,
+			"Insufficient HPA space: need %llu, available %pa\n",
+			size, &max_size);
+		cxl_put_root_decoder(cxl->cxlrd);
+		cxl->cxlrd = NULL;
+		return -ENOSPC;
+	}
+
+	pci_dbg(pdev, "vfio_cxl: Allocated HPA space: %llu bytes\n", max_size);
+	return 0;
+}
+
+static int vfio_cxl_allocate_dpa(struct vfio_pci_cxl_state *cxl,
+				 struct pci_dev *pdev, resource_size_t size)
+{
+	cxl->cxled = cxl_request_dpa(cxl->cxlmd, CXL_PARTMODE_RAM, size);
+	if (IS_ERR(cxl->cxled)) {
+		pci_err(pdev, "Failed to allocate DPA\n");
+		return PTR_ERR(cxl->cxled);
+	}
+
+	pci_dbg(pdev, "vfio_cxl: Allocated DPA: %llu bytes\n", size);
+	return 0;
+}
+
+static int vfio_cxl_create_region(struct vfio_pci_cxl_state *cxl,
+				  struct pci_dev *pdev)
+{
+	cxl->region = cxl_create_region(cxl->cxlrd, &cxl->cxled, 1);
+	if (IS_ERR(cxl->region)) {
+		pci_err(pdev, "Failed to create CXL region\n");
+		return PTR_ERR(cxl->region);
+	}
+
+	pci_dbg(pdev, "vfio_cxl: Created CXL region\n");
+	return 0;
+}
+
+int vfio_cxl_create_cxl_region(struct vfio_pci_core_device *vdev, resource_size_t size)
+{
+	struct vfio_pci_cxl_state *cxl = vdev->cxl;
+	struct pci_dev *pdev = vdev->pdev;
+	int ret;
+
+	if (cxl->precommitted)
+		return 0;
+
+	/* Not pre-committed, need to allocate resources */
+	ret = vfio_cxl_allocate_hpa(cxl, pdev, size);
+	if (ret)
+		return ret;
+
+	ret = vfio_cxl_allocate_dpa(cxl, pdev, size);
+	if (ret)
+		goto err_free_hpa;
+
+	ret = vfio_cxl_create_region(cxl, pdev);
+	if (ret)
+		goto err_free_dpa;
+
+	return 0;
+
+err_free_dpa:
+	cxl_dpa_free(cxl->cxled);
+err_free_hpa:
+	if (cxl->cxlrd)
+		cxl_put_root_decoder(cxl->cxlrd);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(vfio_cxl_create_cxl_region);
+
+void vfio_cxl_destroy_cxl_region(struct vfio_pci_core_device *vdev)
+{
+	struct vfio_pci_cxl_state *cxl = vdev->cxl;
+
+	if (!cxl->region)
+		return;
+
+	cxl_decoder_detach(NULL, cxl->cxled, 0, DETACH_INVALIDATE);
+
+	cxl->region = NULL;
+
+	if (cxl->precommitted)
+		return;
+
+	cxl_dpa_free(cxl->cxled);
+	cxl_put_root_decoder(cxl->cxlrd);
+}
+EXPORT_SYMBOL_GPL(vfio_cxl_destroy_cxl_region);
+
+static int vfio_cxl_create_region_helper(struct vfio_pci_core_device *vdev,
+					 resource_size_t capacity)
+{
+	struct vfio_pci_cxl_state *cxl = vdev->cxl;
+	struct pci_dev *pdev = vdev->pdev;
+	int ret;
+
+	if (cxl->precommitted) {
+		cxl->cxled = cxl_get_committed_decoder(cxl->cxlmd,
+						       &cxl->region);
+		if (IS_ERR(cxl->cxled))
+			return PTR_ERR(cxl->cxled);
+	} else {
+		ret = vfio_cxl_create_cxl_region(vdev, capacity);
+		if (ret)
+			return ret;
+	}
+
+	if (cxl->region) {
+		struct range range;
+
+		ret = cxl_get_region_range(cxl->region, &range);
+		if (ret)
+			goto failed;
+
+		cxl->region_hpa = range.start;
+		cxl->region_size = range_len(&range);
+
+		pci_dbg(pdev, "Precommitted decoder: HPA 0x%llx "
+			"size %lu MB\n",
+			cxl->region_hpa, cxl->region_size >> 20);
+	} else {
+		ret = -ENODEV;
+		goto failed;
+	}
+
+	return 0;
+
+failed:
+	vfio_cxl_destroy_cxl_region(vdev);
+	return ret;
+}
+
 /**
  * vfio_pci_cxl_detect_and_init - Detect and initialize CXL Type-2 device
  * @vdev: VFIO PCI device
@@ -342,6 +491,12 @@ void vfio_pci_cxl_detect_and_init(struct vfio_pci_core_device *vdev)
 		goto failed;
 	}
 
+	ret = vfio_cxl_create_region_helper(vdev, capacity);
+	if (ret) {
+		pci_err(pdev, "Failed to create CXL region: %d\n", ret);
+		goto failed;
+	}
+
 	pci_info(pdev, "CXL Type-2 device initialized successfully\n");
 
 	return;
@@ -353,7 +508,21 @@ EXPORT_SYMBOL_GPL(vfio_pci_cxl_detect_and_init);
 
 void vfio_pci_cxl_cleanup(struct vfio_pci_core_device *vdev)
 {
-	if (!vdev->cxl)
+	struct vfio_pci_cxl_state *cxl = vdev->cxl;
+
+	if (!cxl || !cxl->region)
 		return;
+
+	cxl_decoder_detach(NULL, cxl->cxled, 0, DETACH_INVALIDATE);
+
+	/* Free resources only if we allocated them */
+	if (!cxl->precommitted) {
+		cxl_dpa_free(cxl->cxled);
+		cxl_put_root_decoder(cxl->cxlrd);
+	}
+
+	unregister_region(cxl->region);
+
+	cxl->region = NULL;
 }
 EXPORT_SYMBOL_GPL(vfio_pci_cxl_cleanup);
