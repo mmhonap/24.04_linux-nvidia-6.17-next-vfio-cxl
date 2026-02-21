@@ -693,6 +693,7 @@ void vfio_pci_core_close_device(struct vfio_device *core_vdev)
 #if IS_ENABLED(CONFIG_EEH)
 	eeh_dev_release(vdev->pdev);
 #endif
+
 	vfio_pci_core_disable(vdev);
 
 	mutex_lock(&vdev->igate);

@@ -409,6 +409,13 @@ struct vfio_region_info_cap_type {
  */
 #define VFIO_REGION_SUBTYPE_IBM_NVLINK2_ATSD	(1)
 
+/* 1e98 vendor PCI sub-types (CXL Consortium) */
+/*
+ * CXL memory region. Use with region type
+ * (PCI_VENDOR_ID_CXL | VFIO_REGION_TYPE_PCI_VENDOR_TYPE).
+ */
+#define VFIO_REGION_SUBTYPE_CXL			(1)
+
 /* sub-types for VFIO_REGION_TYPE_GFX */
 #define VFIO_REGION_SUBTYPE_GFX_EDID            (1)
 

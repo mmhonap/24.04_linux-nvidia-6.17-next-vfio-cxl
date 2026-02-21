@@ -113,6 +113,7 @@ void vfio_pci_cxl_cleanup(struct vfio_pci_core_device *vdev);
 int vfio_cxl_create_cxl_region(struct vfio_pci_core_device *vdev,
 			       resource_size_t size);
 void vfio_cxl_destroy_cxl_region(struct vfio_pci_core_device *vdev);
+int vfio_cxl_register_cxl_region(struct vfio_pci_core_device *vdev);
 
 #else
 
@@ -124,6 +125,9 @@ static inline int vfio_cxl_create_cxl_region(struct vfio_pci_core_device *vdev,
 { return 0; }
 static inline void
 vfio_cxl_destroy_cxl_region(struct vfio_pci_core_device *vdev) { }
+static inline int
+vfio_cxl_register_cxl_region(struct vfio_pci_core_device *vdev)
+{ return 0; }
 
 #endif /* CONFIG_VFIO_CXL_CORE */
 

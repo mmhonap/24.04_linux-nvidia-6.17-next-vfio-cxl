@@ -122,6 +122,15 @@ static int vfio_pci_open_device(struct vfio_device *core_vdev)
 
 	vfio_pci_core_finish_enable(vdev);
 
+	if (vdev->cxl) {
+		ret = vfio_cxl_register_cxl_region(vdev);
+		if (ret) {
+			pci_warn(pdev, "Failed to setup CXL region\n");
+			vfio_pci_core_disable(vdev);
+			return ret;
+		}
+	}
+
 	return 0;
 }
 
