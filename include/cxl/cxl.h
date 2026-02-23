@@ -296,4 +296,10 @@ struct cxl_region *cxl_create_region(struct cxl_root_decoder *cxlrd,
 
 int cxl_get_hdm_reg_info(struct cxl_dev_state *cxlds, u32 *count,
 			 resource_size_t *offset, resource_size_t *size);
+enum cxl_regloc_type;
+int cxl_find_regblock(struct pci_dev *pdev, enum cxl_regloc_type type,
+		      struct cxl_register_map *map);
+void cxl_probe_component_regs(struct device *dev, void __iomem *base,
+			      struct cxl_component_reg_map *map);
+
 #endif /* __CXL_CXL_H__ */
