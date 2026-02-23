@@ -120,8 +120,8 @@ struct perm_bits {
 #define	NO_WRITE	0
 #define	ALL_WRITE	0xFFFFFFFFU
 
-static int vfio_user_config_read(struct pci_dev *pdev, int offset,
-				 __le32 *val, int count)
+int vfio_user_config_read(struct pci_dev *pdev, int offset,
+			  __le32 *val, int count)
 {
 	int ret = -EINVAL;
 	u32 tmp_val = 0;
@@ -151,8 +151,8 @@ static int vfio_user_config_read(struct pci_dev *pdev, int offset,
 	return ret;
 }
 
-static int vfio_user_config_write(struct pci_dev *pdev, int offset,
-				  __le32 val, int count)
+int vfio_user_config_write(struct pci_dev *pdev, int offset,
+			   __le32 val, int count)
 {
 	int ret = -EINVAL;
 	u32 tmp_val = le32_to_cpu(val);

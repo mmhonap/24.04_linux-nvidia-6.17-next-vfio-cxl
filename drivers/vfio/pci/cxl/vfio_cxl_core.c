@@ -84,7 +84,8 @@ static int vfio_cxl_create_device_state(struct vfio_pci_core_device *vdev,
 	cxl = vdev->cxl;
 	cxl->dvsec = dvsec;
 
-	pci_read_config_word(pdev, dvsec + 0xa, &cap_word);  // CXL Capability
+	pci_read_config_word(pdev, dvsec + CXL_DVSEC_CAPABILITY_OFFSET,
+			     &cap_word);
 	pci_dbg(pdev, "vfio_cxl: CXL Capability Register: 0x%04x\n", cap_word);
 	pci_dbg(pdev, "vfio_cxl:    CXL.cache: %s\n",
 		(cap_word & BIT(0)) ? "yes" : "no");
