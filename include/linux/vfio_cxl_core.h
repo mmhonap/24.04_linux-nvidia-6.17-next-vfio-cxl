@@ -11,6 +11,17 @@
 #include <cxl/cxl.h>
 #include <linux/types.h>
 
+struct vfio_pci_core_device;
+
+struct vfio_emulated_regblock {
+	struct range range;
+	ssize_t (*read)(struct vfio_pci_core_device *vdev, void *buf,
+			u64 offset, u64 size);
+	ssize_t (*write)(struct vfio_pci_core_device *vdev, void *buf,
+			 u64 offset, u64 size);
+	struct list_head list;
+};
+
 /* CXL device state embedded in vfio_pci_core_device */
 struct vfio_pci_cxl_state {
 	struct cxl_dev_state         cxlds;
@@ -25,11 +36,22 @@ struct vfio_pci_cxl_state {
 	size_t                       hdm_reg_size;
 	resource_size_t              comp_reg_offset;
 	size_t                       comp_reg_size;
+	void                        *initial_comp_reg_virt;
+	void                        *comp_reg_virt;
+	void                        *initial_config_virt;
+	void                        *config_virt;
+	size_t                       config_size;
+	struct list_head             config_regblocks_head;
+	struct list_head             mmio_regblocks_head;
 	size_t                       dpa_size;
 	u32                          hdm_count;
 	u16                          dvsec;
 	u8                           comp_reg_bar;
 	bool                         precommitted;
 };
+
+/* Register access sizes */
+#define CXL_REG_SIZE_WORD 2
+#define CXL_REG_SIZE_DWORD 4
 
 #endif /* __LINUX_VFIO_CXL_CORE_H */

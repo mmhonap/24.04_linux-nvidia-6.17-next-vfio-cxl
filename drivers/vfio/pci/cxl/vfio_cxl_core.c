@@ -15,8 +15,46 @@
 #include <cxl/pci.h>
 
 #include "../vfio_pci_priv.h"
+#include "vfio_cxl_priv.h"
 
 MODULE_IMPORT_NS("CXL");
+
+/*
+ * Size of the CXL Device DVSEC structure we backup and emulate.
+ * CXL v4.0 8.1.3 PCIe DVSEC for CXL Devices
+ */
+#define CXL_DEVICE_DVSEC_LEN 0x40
+
+u8 vfio_cxl_get_component_reg_bar(struct vfio_pci_core_device *vdev)
+{
+	struct vfio_pci_cxl_state *cxl = vdev->cxl;
+
+	return cxl->comp_reg_bar;
+}
+EXPORT_SYMBOL_GPL(vfio_cxl_get_component_reg_bar);
+
+/**
+ * vfio_pci_cxl_config_in_dvsec_range - True if config offset
+ * is in CXL DVSEC range
+ * @vdev: VFIO PCI core device (vdev->cxl must be set)
+ * @pos: config space offset (bytes)
+ * @count: access size (bytes)
+ *
+ * Used by the integrated config path to call CXL emulation only for the
+ * DVSEC range.
+ */
+bool vfio_cxl_config_in_dvsec_range(struct vfio_pci_core_device *vdev,
+				    loff_t pos, size_t count)
+{
+	struct vfio_pci_cxl_state *cxl = vdev->cxl;
+
+	if (!vdev->cxl || !count)
+		return false;
+
+	return (pos < cxl->dvsec + CXL_DEVICE_DVSEC_LEN &&
+		pos + count > cxl->dvsec);
+}
+EXPORT_SYMBOL_GPL(vfio_cxl_config_in_dvsec_range);
 
 static int vfio_cxl_create_device_state(struct vfio_pci_core_device *vdev,
 					u16 dvsec)
@@ -87,6 +125,80 @@ static int vfio_cxl_find_bar(struct pci_dev *pdev, resource_size_t hpa, u8 *bar,
 	}
 
 	return -ENODEV;
+}
+
+static void clean_virt_regs(struct vfio_pci_cxl_state *cxl)
+{
+	kvfree(cxl->comp_reg_virt);
+	kvfree(cxl->config_virt);
+}
+
+static void reset_virt_regs(struct vfio_pci_cxl_state *cxl)
+{
+	memcpy(cxl->config_virt, cxl->initial_config_virt, cxl->config_size);
+	memcpy(cxl->comp_reg_virt, cxl->initial_comp_reg_virt,
+	       cxl->comp_reg_size);
+}
+
+static int vfio_cxl_setup_virt_regs(struct vfio_pci_core_device *vdev)
+{
+	struct vfio_pci_cxl_state *cxl = vdev->cxl;
+	resource_size_t offset = cxl->comp_reg_offset;
+	struct pci_dev *pdev = vdev->pdev;
+	size_t size = cxl->comp_reg_size;
+	u8 bar = cxl->comp_reg_bar;
+	void __iomem *mmio;
+	void *dvsec_backup;
+	void *config_base;
+	void *comp_base;
+	unsigned int i;
+
+	comp_base = kvzalloc(size * 2, GFP_KERNEL);
+	if (!comp_base)
+		return -ENOMEM;
+
+	cxl->comp_reg_virt = comp_base;
+	cxl->initial_comp_reg_virt = comp_base + size;
+
+	mmio = ioremap(pci_resource_start(pdev, bar) + offset, size);
+	if (!mmio) {
+		kvfree(cxl->comp_reg_virt);
+		cxl->comp_reg_virt = NULL;
+		return -ENOMEM;
+	}
+
+	for (i = 0; i < size; i += 4)
+		*(u32 *)(cxl->initial_comp_reg_virt + i) =
+			cpu_to_le32(readl(mmio + i));
+
+	iounmap(mmio);
+
+	/*
+	 * Two full config-sized buffers: one for emulation (config_virt) and
+	 * one for reset backup (initial_config_virt). Layout matches PCI config
+	 * space; only the CXL DVSEC range is initialized from hardware.
+	 */
+	config_base = kvzalloc(pdev->cfg_size * 2, GFP_KERNEL);
+	if (!config_base) {
+		kvfree(cxl->comp_reg_virt);
+		return -ENOMEM;
+	}
+
+	cxl->config_virt = config_base;
+	cxl->initial_config_virt = config_base + pdev->cfg_size;
+	cxl->config_size = pdev->cfg_size;
+
+	dvsec_backup = cxl->initial_config_virt + cxl->dvsec;
+
+	for (i = 0; i < CXL_DEVICE_DVSEC_LEN; i += 4) {
+		u32 val;
+
+		pci_read_config_dword(pdev, cxl->dvsec + i, &val);
+		*(u32 *)(dvsec_backup + i) = cpu_to_le32(val);
+	}
+
+	reset_virt_regs(cxl);
+	return 0;
 }
 
 static int vfio_cxl_setup_regs(struct vfio_pci_core_device *vdev)
@@ -170,6 +282,12 @@ static int vfio_cxl_setup_regs(struct vfio_pci_core_device *vdev)
 	pci_dbg(pdev,
 		"vfio_cxl: component regs: BAR%d offset 0x%llx size 0x%lx\n",
 		cxl->comp_reg_bar, cxl->comp_reg_offset, cxl->comp_reg_size);
+
+	ret = vfio_cxl_setup_virt_regs(vdev);
+	if (ret) {
+		pci_err(pdev, "Failed to setup virt regs: %d\n", ret);
+		return ret;
+	}
 
 	return 0;
 }
@@ -499,6 +617,14 @@ void vfio_pci_cxl_detect_and_init(struct vfio_pci_core_device *vdev)
 
 	pci_info(pdev, "CXL Type-2 device initialized successfully\n");
 
+	ret = vfio_cxl_setup_register_emulation(vdev);
+	if (ret) {
+		pci_err(pdev, "Failed to setup register emulation framework: %d\n",
+			ret);
+		vfio_pci_cxl_cleanup(vdev);
+		goto failed;
+	}
+
 	return;
 
 failed:
@@ -506,12 +632,21 @@ failed:
 }
 EXPORT_SYMBOL_GPL(vfio_pci_cxl_detect_and_init);
 
+static void disable_device(struct vfio_pci_cxl_state *cxl)
+{
+	clean_virt_regs(cxl);
+}
+
 void vfio_pci_cxl_cleanup(struct vfio_pci_core_device *vdev)
 {
 	struct vfio_pci_cxl_state *cxl = vdev->cxl;
 
 	if (!cxl || !cxl->region)
 		return;
+
+	vfio_cxl_clean_register_emulation(vdev);
+
+	disable_device(cxl);
 
 	cxl_decoder_detach(NULL, cxl->cxled, 0, DETACH_INVALIDATE);
 

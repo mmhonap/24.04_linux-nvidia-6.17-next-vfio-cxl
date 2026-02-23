@@ -114,6 +114,15 @@ int vfio_cxl_create_cxl_region(struct vfio_pci_core_device *vdev,
 			       resource_size_t size);
 void vfio_cxl_destroy_cxl_region(struct vfio_pci_core_device *vdev);
 int vfio_cxl_register_cxl_region(struct vfio_pci_core_device *vdev);
+u8 vfio_cxl_get_component_reg_bar(struct vfio_pci_core_device *vdev);
+bool vfio_cxl_config_in_dvsec_range(struct vfio_pci_core_device *vdev,
+				    loff_t pos, size_t count);
+ssize_t vfio_cxl_config_rw(struct vfio_pci_core_device *pcdev,
+			   char __user *buf, size_t count, loff_t *ppos,
+			   bool write);
+ssize_t vfio_cxl_mmio_bar_rw(struct vfio_pci_core_device *pcdev,
+			     char __user *buf, size_t count, loff_t *ppos,
+			     bool write);
 
 #else
 
@@ -128,6 +137,23 @@ vfio_cxl_destroy_cxl_region(struct vfio_pci_core_device *vdev) { }
 static inline int
 vfio_cxl_register_cxl_region(struct vfio_pci_core_device *vdev)
 { return 0; }
+static inline u8
+vfio_cxl_get_component_reg_bar(struct vfio_pci_core_device *vdev)
+{ return 0; }
+static inline bool
+vfio_cxl_config_in_dvsec_range(struct vfio_pci_core_device *vdev,
+			       loff_t pos, size_t count)
+{ return false; }
+static inline ssize_t
+vfio_cxl_config_rw(struct vfio_pci_core_device *vdev,
+		   char __user *buf, size_t count, loff_t *ppos,
+		   bool write)
+{ return -ENOTTY; }
+static inline ssize_t
+vfio_cxl_mmio_bar_rw(struct vfio_pci_core_device *vdev,
+		     char __user *buf, size_t count, loff_t *ppos,
+		     bool write)
+{ return -ENOTTY; }
 
 #endif /* CONFIG_VFIO_CXL_CORE */
 

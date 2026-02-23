@@ -1866,6 +1866,21 @@ static size_t vfio_pci_cap_remaining_dword(struct vfio_pci_core_device *vdev,
 	return i;
 }
 
+/*
+ * Compute the next config space access chunk size (1, 2, or 4 bytes)
+ * so that we do not cross capability boundaries.
+ */
+static size_t vfio_pci_config_chunk_size(struct vfio_pci_core_device *vdev,
+					 loff_t pos, size_t count)
+{
+	count = min(count, vfio_pci_cap_remaining_dword(vdev, pos));
+	if (count >= 4 && !(pos % 4))
+		return 4;
+	if (count >= 2 && !(pos % 2))
+		return 2;
+	return 1;
+}
+
 static ssize_t vfio_config_do_rw(struct vfio_pci_core_device *vdev, char __user *buf,
 				 size_t count, loff_t *ppos, bool iswrite)
 {
@@ -1879,18 +1894,6 @@ static ssize_t vfio_config_do_rw(struct vfio_pci_core_device *vdev, char __user 
 	if (*ppos < 0 || *ppos >= pdev->cfg_size ||
 	    *ppos + count > pdev->cfg_size)
 		return -EFAULT;
-
-	/*
-	 * Chop accesses into aligned chunks containing no more than a
-	 * single capability.  Caller increments to the next chunk.
-	 */
-	count = min(count, vfio_pci_cap_remaining_dword(vdev, *ppos));
-	if (count >= 4 && !(*ppos % 4))
-		count = 4;
-	else if (count >= 2 && !(*ppos % 2))
-		count = 2;
-	else
-		count = 1;
 
 	ret = count;
 
@@ -1963,11 +1966,29 @@ ssize_t vfio_pci_config_rw(struct vfio_pci_core_device *vdev, char __user *buf,
 	size_t done = 0;
 	int ret = 0;
 	loff_t pos = *ppos;
+	size_t chunk;
 
 	pos &= VFIO_PCI_OFFSET_MASK;
 
 	while (count) {
-		ret = vfio_config_do_rw(vdev, buf, count, &pos, iswrite);
+		chunk = vfio_pci_config_chunk_size(vdev, pos, count);
+
+		if (vdev->cxl &&
+		    vfio_cxl_config_in_dvsec_range(vdev, pos, chunk)) {
+			ret = vfio_cxl_config_rw(vdev, buf, chunk,
+						 &pos, iswrite);
+			/*
+			 * No CXL regblock for this offset: fall back to
+			 * standard config (HW/perm)
+			 */
+			if (ret == -ENOTTY)
+				ret = vfio_config_do_rw(vdev, buf, chunk,
+							&pos, iswrite);
+		} else {
+			ret = vfio_config_do_rw(vdev, buf, chunk,
+						&pos, iswrite);
+		}
+
 		if (ret < 0)
 			return ret;
 

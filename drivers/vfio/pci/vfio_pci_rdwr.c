@@ -245,6 +245,15 @@ ssize_t vfio_pci_bar_rw(struct vfio_pci_core_device *vdev, char __user *buf,
 	if (pos >= end)
 		return -EINVAL;
 
+	if (vdev->cxl &&
+	    bar == VFIO_PCI_BAR0_REGION_INDEX +
+	    vfio_cxl_get_component_reg_bar(vdev)) {
+		ssize_t ret = vfio_cxl_mmio_bar_rw(vdev, buf, count, ppos, iswrite);
+
+		if (ret != -ENOTTY)
+			return ret;
+	}
+
 	count = min(count, (size_t)(end - pos));
 
 	if (bar == PCI_ROM_RESOURCE) {
